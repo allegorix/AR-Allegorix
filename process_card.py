@@ -31,4 +31,4 @@ def process_card(input_path, output_path, size=512):
     except Exception as e:
         print(f"Error: {e}")
 
-process_card("card.jpg", "card-inner.png")
+process_card("card.png", "card-inner.png")
