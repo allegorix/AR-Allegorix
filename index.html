@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -10,155 +9,295 @@
     <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
     <!-- AR.js for A-Frame -->
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    
+    <!-- Look-At Component for the text label -->
+    <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
 
-    <!-- Script to handle opening links -->
+    <!-- Custom Component: DNA Helix generation and animation -->
     <script>
-        AFRAME.registerComponent('click-handler', {
-            schema: { url: { default: 'https://allegorix.com' } },
-            init: function () {
-                // Function to handle the navigation
-                const navigate = () => {
-                    window.location.href = this.data.url;
-                };
+        AFRAME.registerComponent('dna-helix', {
+            schema: {
+                basePairs: { type: 'int', default: 30 },
+                radius: { type: 'number', default: 0.3 },
+                height: { type: 'number', default: 2.0 },
+                frequency: { type: 'number', default: 2.5 },
+                strandRadius: { type: 'number', default: 0.04 },
+                baseRadius: { type: 'number', default: 0.02 },
+                color: { type: 'color', default: '#00ffff' },
+                particleCount: { type: 'int', default: 60 }
+            },
 
-                // Event listeners for different interaction types
-                this.el.addEventListener('click', navigate);
-                this.el.addEventListener('touchstart', navigate);
+            init: function () {
+                const data = this.data;
+                this.Object3D = new THREE.Object3D();
+                
+                // Materials
+                // A stylized, glowing cyan material
+                const material = new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(data.color),
+                    emissive: new THREE.Color(data.color),
+                    emissiveIntensity: 0.8,
+                    roughness: 0.2,
+                    metalness: 0.8,
+                    transparent: true,
+                    opacity: 1.0 // Will be animated by A-Frame component
+                });
+                // Save material reference to animate opacity later
+                this.helixMaterial = material;
+
+                // Geometries for instancing
+                const sphereGeometry = new THREE.SphereGeometry(data.strandRadius, 16, 16);
+                const cylinderGeometry = new THREE.CylinderGeometry(data.baseRadius, data.baseRadius, data.radius * 2, 8);
+                cylinderGeometry.rotateZ(Math.PI / 2); // Orient horizontally
+
+                // Calculate positions
+                this.time = 0;
+                
+                // --- Build DNA Structure ---
+                const helixGroup = new THREE.Group();
+                
+                for (let i = 0; i < data.basePairs; i++) {
+                    // Normalized position from -0.5 to 0.5 along height
+                    const t = i / (data.basePairs - 1);
+                    const y = (t - 0.5) * data.height;
+                    
+                    // Angle for the double helix twist
+                    const angle = t * Math.PI * 2 * data.frequency;
+                    
+                    const x1 = Math.cos(angle) * data.radius;
+                    const z1 = Math.sin(angle) * data.radius;
+                    
+                    const x2 = Math.cos(angle + Math.PI) * data.radius;
+                    const z2 = Math.sin(angle + Math.PI) * data.radius;
+
+                    // Strand 1 node
+                    const sphere1 = new THREE.Mesh(sphereGeometry, material);
+                    sphere1.position.set(x1, y, z1);
+                    helixGroup.add(sphere1);
+
+                    // Strand 2 node
+                    const sphere2 = new THREE.Mesh(sphereGeometry, material);
+                    sphere2.position.set(x2, y, z2);
+                    helixGroup.add(sphere2);
+
+                    // Connecting base pair
+                    const cyl = new THREE.Mesh(cylinderGeometry, material);
+                    cyl.position.set(0, y, 0);
+                    cyl.rotation.y = -angle; // Point towards strands
+                    helixGroup.add(cyl);
+                }
+                
+                this.Object3D.add(helixGroup);
+                this.helixGroup = helixGroup;
+
+                // --- Build Particle System ---
+                const particleGeometry = new THREE.BufferGeometry();
+                const particlePositions = new Float32Array(data.particleCount * 3);
+                this.particleSpeeds = [];
+                this.particleOffsets = [];
+
+                for (let i = 0; i < data.particleCount * 3; i += 3) {
+                    // Random spherical distribution roughly around the helix
+                    const h = (Math.random() - 0.5) * data.height * 1.2;
+                    const r = data.radius * 1.5 + Math.random() * 0.5;
+                    const a = Math.random() * Math.PI * 2;
+                    
+                    particlePositions[i] = Math.cos(a) * r;
+                    particlePositions[i+1] = h;
+                    particlePositions[i+2] = Math.sin(a) * r;
+                    
+                    // Random speeds for orbiting
+                    this.particleSpeeds.push({
+                        speedY: (Math.random() * 0.5 + 0.1) * (Math.random() > 0.5 ? 1 : -1),
+                        speedRot: (Math.random() * 1.0 + 0.5) * (Math.random() > 0.5 ? 1 : -1)
+                    });
+                }
+
+                particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+                
+                const particleMaterial = new THREE.PointsMaterial({
+                    color: new THREE.Color('#88ffff'),
+                    size: 0.03,
+                    transparent: true,
+                    opacity: 0.6,
+                    blending: THREE.AdditiveBlending
+                });
+                
+                this.particleMaterial = particleMaterial; // for opacity fade
+                this.particles = new THREE.Points(particleGeometry, particleMaterial);
+                this.Object3D.add(this.particles);
+
+                // Add constructed 3D object to A-Frame entity
+                this.el.setObject3D('mesh', this.Object3D);
+                
+                // Reference height for hover animation
+                this.baseY = this.el.object3D.position.y;
+            },
+
+            tick: function (time, timeDelta) {
+                const dt = timeDelta / 1000;
+                this.time += dt;
+
+                // Rotate entire helix
+                this.helixGroup.rotation.y = this.time * 0.5;
+
+                // Gentle hover up and down
+                this.el.object3D.position.y = this.baseY + Math.sin(this.time * 1.5) * 0.1;
+
+                // Animate particles
+                if (this.particles) {
+                    const positions = this.particles.geometry.attributes.position.array;
+                    let pIdx = 0;
+                    for (let i = 0; i < positions.length; i += 3) {
+                        const speed = this.particleSpeeds[pIdx];
+                        
+                        // Current position
+                        let cx = positions[i];
+                        let cy = positions[i+1];
+                        let cz = positions[i+2];
+                        
+                        // Orbit rotation math around Y axis
+                        const cosT = Math.cos(speed.speedRot * dt);
+                        const sinT = Math.sin(speed.speedRot * dt);
+                        const nx = cx * cosT - cz * sinT;
+                        const nz = cx * sinT + cz * cosT;
+                        
+                        // Vertical drift
+                        let ny = cy + speed.speedY * dt;
+                        
+                        // Wrap vertically
+                        const h2 = this.data.height * 0.6;
+                        if (ny > h2) ny = -h2;
+                        if (ny < -h2) ny = h2;
+                        
+                        positions[i] = nx;
+                        positions[i+1] = ny;
+                        positions[i+2] = nz;
+
+                        pIdx++;
+                    }
+                    this.particles.geometry.attributes.position.needsUpdate = true;
+                }
+            },
+            
+            // Allow setting global opacity for fade-in effect via other components
+            updateOpacity: function(op) {
+                if (this.helixMaterial) this.helixMaterial.opacity = op;
+                if (this.particleMaterial) this.particleMaterial.opacity = op * 0.6; // keep particles slightly more transparent
             }
         });
-    </script>
 
+        // Component to handle marker found logic (fade in)
+        AFRAME.registerComponent('ar-controller', {
+            init: function() {
+                this.dnaEl = document.querySelector('[dna-helix]');
+                this.labelEl = document.querySelector('#dna-label');
+                
+                // Initial hide state
+                this.setOpacity(0);
+                this.isFadingIn = false;
+                this.fadeProgress = 0;
+                this.fadeDuration = 0.7; // seconds
+
+                this.el.addEventListener('markerFound', () => {
+                    this.isFadingIn = true;
+                    this.fadeProgress = 0;
+                });
+                
+                this.el.addEventListener('markerLost', () => {
+                    this.isFadingIn = false;
+                    this.setOpacity(0);
+                });
+            },
+            
+            setOpacity: function(op) {
+                if (this.dnaEl && this.dnaEl.components['dna-helix']) {
+                    this.dnaEl.components['dna-helix'].updateOpacity(op);
+                }
+                if (this.labelEl) {
+                    // Update text opacity
+                    this.labelEl.setAttribute('text', 'opacity', op);
+                }
+            },
+            
+            tick: function(time, timeDelta) {
+                if (this.isFadingIn && this.fadeProgress < 1.0) {
+                    this.fadeProgress += (timeDelta / 1000) / this.fadeDuration;
+                    if (this.fadeProgress > 1.0) this.fadeProgress = 1.0;
+                    
+                    // Ease out quad
+                    const op = this.fadeProgress * (2 - this.fadeProgress);
+                    this.setOpacity(op);
+                }
+            }
+        });
+        
+    </script>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #000;
-        }
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        /* Add a subtle UI overlay if needed later */
     </style>
 </head>
 
-<body style="margin: 0; overflow: hidden;">
-
+<body>
     <!-- AR Scene Configuration -->
     <a-scene embedded
         arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
-        renderer="logarithmicDepthBuffer: true; antialias: true;" vr-mode-ui="enabled: false">
+        renderer="logarithmicDepthBuffer: true; antialias: true; colorManagement: true;" 
+        vr-mode-ui="enabled: false">
 
-        <!-- Assets Management System -->
-        <a-assets>
-            <!-- SWAP URL: Place your actual profile image link from https://alanjolly.in here -->
-            <!-- We use a placeholder image here for testing purposes -->
-            <img id="profile-pic"
-                src="https://ui-avatars.com/api/?name=Alan+Jolly&background=222&color=0df&size=512&rounded=true"
-                crossorigin="anonymous">
-        </a-assets>
+        <!-- ambient light for the helix -->
+        <a-light type="ambient" color="#ffffff" intensity="0.5"></a-light>
+        <!-- Directional light to give some 3D shaping to the helix -->
+        <a-light type="directional" color="#ffffff" intensity="0.8" position="-1 2 1"></a-light>
 
-        <!-- 
-      ================================================================================
-      MARKER SETUP
-      ================================================================================
-      Currently using the default "hiro" marker for quick testing.
-      
-      TO USE YOUR CUSTOM CARD (via .patt file):
-      1. Go to https://ar-js-org.github.io/AR.js/three.js/examples/marker-training/examples/generator.html
-      2. Upload your business card image, and download the .patt file (e.g., 'card-marker.patt')
-      3. Save 'card-marker.patt' in the same folder as this index.html
-      4. Replace the <a-marker> tag below with:
-         <a-marker type="pattern" url="card-marker.patt">
-      ================================================================================
-    -->
-        <a-marker type="pattern" url="card.patt">
+        <a-marker type="pattern" url="card.patt" ar-controller>
+            
+            <!-- 
+              OCCLUSION PLANE 
+              This is a hidden plane that lies perfectly flat on the marker.
+              It writes to the depth buffer but not the color buffer, so any 3D object
+              that dips "below" the card (y < 0) will be hidden, creating the illusion
+              that the card is a solid table/base.
+            -->
+            <a-plane position="0 0 0" rotation="-90 0 0" width="3" height="3" 
+                     material="colorWrite: false; depthWrite: true; shader: flat" 
+                     render-order="0"></a-plane>
 
-            <!-- 1. Profile Image (Floating above) -->
-            <!-- Positioned above the card (y=1). Rotated to face the mobile layout accurately -->
-            <a-image src="#profile-pic" position="0 1.2 0" rotation="-90 0 0" scale="1.2 1.2 1.2">
-            </a-image>
-
-            <!-- 2. Name: 3D Text -->
-            <a-text value="Alan Jolly" position="0 0.3 0" rotation="-90 0 0" align="center" color="#00FFFF" width="5"
-                font="exo2bold">
-            </a-text>
-
-            <!-- 3. Role: 3D Text -->
-            <a-text value="Cybersecurity Analyst & Founder" position="0 0.1 0.5" rotation="-90 0 0" align="center"
-                color="#FFFFFF" width="2.5" font="exo2bold">
-            </a-text>
-
-            <!-- 4. Clickable Button (Links to Website) -->
-            <!-- Bounding entity for interactions -->
-            <a-entity position="0 0 1.5" rotation="-90 0 0" class="clickable"
-                click-handler="url: https://allegorix.com">
-
-                <!-- Button Background Plane -->
-                <a-plane width="2.5" height="0.6" color="#004d4d" material="opacity: 0.8; transparent: true">
-                </a-plane>
-
-                <!-- Button Text -->
-                <a-text value="VISIT ALLEGORIX.COM" align="center" position="0 0 0.05" color="#00ffff" width="2.5"
-                    font="exo2bold">
-                </a-text>
+            <!-- 
+              DNA HELIX
+              Positioned aligned roughly with the big circular gear on the right.
+              Assuming center of marker is 0,0. 
+              The right side of the card would be +X.
+            -->
+            <a-entity dna-helix="height: 1.8; radius: 0.25; color: #00d8ff; particleCount: 80" 
+                      position="1.0 1.0 0.0" 
+                      scale="0.8 0.8 0.8">
             </a-entity>
-
-            <!-- ========================================== -->
-            <!-- 5. 3D Circuit Assembly Animation           -->
-            <!-- ========================================== -->
-            <!-- Positioned above the card to the top left (-x, -z) relative to card center -->
-            <a-entity position="-1 0 -0.5">
-
-                <!-- Base Circuit Board -->
-                <a-box position="0 0.05 0" width="1.6" depth="1.2" height="0.05" color="#002211"
-                    material="roughness: 0.9"></a-box>
-
-                <!-- Animated Glowing Traces -->
-                <a-entity position="0 0.08 0"
-                    animation="property: opacity; from: 0.2; to: 1; dur: 800; dir: alternate; loop: true">
-                    <a-plane position="-0.4 0 -0.2" rotation="-90 0 0" width="0.6" height="0.02"
-                        color="#00ffff"></a-plane>
-                    <a-plane position="0.2 0 0.3" rotation="-90 0 0" width="0.02" height="0.6"
-                        color="#00ffff"></a-plane>
-                    <a-plane position="0.4 0 -0.1" rotation="-90 0 0" width="0.4" height="0.02"
-                        color="#00ffff"></a-plane>
-                    <a-plane position="-0.2 0 0.4" rotation="-90 0 0" width="0.6" height="0.02"
-                        color="#00ffff"></a-plane>
-                </a-entity>
-
-                <!-- Component 1: Memory Chip (Drops down) -->
-                <!-- Position Z=0 in entity space. Y changes from 1.5 to 0.1 -->
-                <a-box width="0.3" depth="0.5" height="0.08" color="#1a1a1a"
-                    animation="property: position; from: -0.5 1.5 0.1; to: -0.5 0.1 0.1; dur: 2000; easing: easeInOutSine; dir: alternate; loop: true">
-                </a-box>
-
-                <!-- Component 2: Network Chip (Drops down) -->
-                <a-box width="0.3" depth="0.2" height="0.06" color="#1a1a1a"
-                    animation="property: position; from: 0.5 1.8 -0.3; to: 0.5 0.1 -0.3; dur: 2200; easing: easeInOutSine; dir: alternate; loop: true">
-                </a-box>
-
-                <!-- Component 3: Main CPU (Drops down) -->
-                <a-entity
-                    animation="property: position; from: 0 2.5 0; to: 0 0.12 0; dur: 2500; easing: easeInOutElastic; dir: alternate; loop: true">
-                    <!-- CPU Silicon -->
-                    <a-box width="0.6" depth="0.6" height="0.08" color="#222"></a-box>
-                    <!-- CPU Core (Gold/Cyan) -->
-                    <a-box position="0 0.04 0" width="0.3" depth="0.3" height="0.02" color="#00ffff"
-                        material="metalness: 0.8; roughness: 0.2"></a-box>
-                    <!-- CPU Label -->
-                    <a-text value="ALLEGORIX" align="center" position="0 0.06 0" rotation="-90 0 0" color="#ffffff"
-                        width="1.2" font="exo2bold"></a-text>
-                </a-entity>
-
+            
+            <!--
+              GOLD LABEL
+              Positioned beneath the helix. Uses look-at to always face the camera.
+              We adjust its position dynamically or leave it statically anchored below the helix base.
+            -->
+            <a-entity id="dna-label"
+                      position="1.0 0.15 0.2"
+                      look-at="[camera]">
+                <!-- Using a thin, stylized font, gold coloring -->
+                <a-text value="Allegorix - Cyber Genetics of Security" 
+                        align="center" 
+                        color="#FFF4B3" 
+                        width="3" 
+                        scale="0.6 0.6 0.6"
+                        font="mozillavr" 
+                        opacity="0">
+                </a-text>
             </a-entity>
 
         </a-marker>
 
-        <!-- Camera setup for Raycasting (Interactions/Clicks) -->
-        <!-- Enables tapping/clicking the 3D button from the mobile device screen -->
-        <a-entity camera>
-            <a-entity cursor="rayOrigin: mouse; fuse: false;" raycaster="objects: .clickable;">
-            </a-entity>
-        </a-entity>
+        <a-entity camera></a-entity>
 
     </a-scene>
-
 </body>
-
 </html>
