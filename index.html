@@ -193,19 +193,33 @@
                 this.dnaEl = document.querySelector('[dna-helix]');
                 this.labelEl = document.querySelector('#dna-label');
                 
-                // Initial hide state
-                this.setOpacity(0);
                 this.isFadingIn = false;
                 this.fadeProgress = 0;
                 this.fadeDuration = 0.7; // seconds
+                this.isVisible = false;
+
+                // Hide until marker is detected — wait for scene to be loaded first
+                const hideOnLoad = () => {
+                    this.dnaEl = document.querySelector('[dna-helix]');
+                    this.labelEl = document.querySelector('#dna-label');
+                    this.setOpacity(0);
+                };
+                
+                if (this.el.sceneEl.hasLoaded) {
+                    hideOnLoad();
+                } else {
+                    this.el.sceneEl.addEventListener('loaded', hideOnLoad);
+                }
 
                 this.el.addEventListener('markerFound', () => {
+                    this.isVisible = true;
                     this.isFadingIn = true;
                     this.fadeProgress = 0;
                 });
                 
                 this.el.addEventListener('markerLost', () => {
                     this.isFadingIn = false;
+                    this.isVisible = false;
                     this.setOpacity(0);
                 });
             },
@@ -242,7 +256,7 @@
 <body>
     <!-- AR Scene Configuration -->
     <a-scene embedded
-        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono;"
         renderer="logarithmicDepthBuffer: true; antialias: true; colorManagement: true;" 
         vr-mode-ui="enabled: false">
 
